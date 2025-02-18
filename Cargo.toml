@@ -1,0 +1,8 @@
+[package]
+name = "senter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hc-sr04 = "0.1.2"
+rppal = "0.22.1"
