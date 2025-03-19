@@ -80,26 +80,24 @@ impl<'a> World<'a> {
         }
         else {
             let t = self.door_list.iter()
-                .fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |mut acc, v| {
-                    acc.0 = acc.0.min(v.x);
-                    acc.1 = acc.1.min(v.y);
-                    acc.2 = acc.2.max(v.x);
-                    acc.3 = acc.3.max(v.y);
+                .fold((f64::MAX, f64::MIN), |mut acc, v| {
+                    acc.0 = acc.0.min(*v);
+                    acc.1 = acc.1.max(*v);
                     acc
             });
-            self.min = Some(Vector2::new(t.0, t.1));
-            self.max = Some(Vector2::new(t.2, t.3));
+            self.min  = Some(t.0);
+            self.max = Some(t.1);
         }
     }
 
-    pub fn remove_wall_point(&mut self, wall_point: Vector2<f64>) {
-        match self.wall_list.iter()
-            .find(|&&v| v == wall_point) {
+    pub fn remove_wall_point(&mut self, door_point: f64) {
+        match self.door_list.iter()
+            .find(|&&v| v == door_point) {
                 Some(_) => {
-                    self.wall_list = self
-                        .wall_list
+                    self.door_list = self
+                        .door_list
                         .iter()
-                        .filter(|&& v| v != wall_point)
+                        .filter(|&& v| v != door_point)
                         .cloned()
                         .collect();
                     self.update_min_max();
@@ -110,13 +108,13 @@ impl<'a> World<'a> {
 }
 
 // This is so it can by drawn.
-impl<'a> Shape for World<'a> {
-    fn draw(&self, painter: &mut Painter) {
-        for v in self.wall_list.clone() {
-            painter.paint(v.x as usize, v.y as usize, Color::White);
-        }
-    }
-}
+// impl<'a> Shape for World<'a> {
+//     fn draw(&self, painter: &mut Painter) {
+//         for v in self.door_list.clone() {
+//             painter.paint( as usize, v.y as usize, Color::White);
+//         }
+//     }
+// }
 
 // impl<'a> World<'a> {
 //     pub fn resize_to_area(&mut self, area: Rect) -> Vec<(f64,f64)> {
@@ -156,7 +154,7 @@ impl<'a> App<'a> {
             mean: 0.,
             // world: World { name: "small",min: (0.,0.),max: (39.,39.) , location: (2.,6.), wall_list: WALL_SMALL.to_vec()},
             // world: World::new("small", None,  WALL_SMALL.to_vec().iter().map(|(x,y)| Vector2::new(*x,*y)).collect::<Vec<Vector2<f64>>>()),
-            world: World::new("big", None,  WALL_BIG.to_vec().iter().map(|(x,y)| Vector2::new(*x,*y)).collect::<Vec<Vector2<f64>>>()),
+            world: World::new("big", None, vec![2., 4., 7.5]),
             //world: World { name: "big",min: (0.,0.),max: (99.,99.) , location: (5.,20.), wall_list: WALL_BIG.to_vec()},
             my_pi,
             exit: false }
@@ -249,11 +247,11 @@ impl<'a> App<'a> {
             .title_bottom(instructions.centered())
             .border_set(border::THICK);
         
-        let (vl, vr) = self.my_pi.get_wheel_velo();
+        let v = self.my_pi.get_velo();
         let p = self.my_pi.robot_position();
         let counter_text: Text<'_> = Text::from(
-            vec![Line::from(vec!["Position: x=".into(), p.x.to_string().yellow().into(), " y=".into(), p.y.to_string().yellow().into(), ]),
-                 Line::from(vec!["Wheel velo:  x=".into(), vl.to_string().yellow(), " y=".into(), vr.to_string().yellow()])
+            vec![Line::from(vec!["Position: x=".into(), p.to_string().yellow().into(), " y=".into(), p.to_string().yellow().into(), ]),
+                 Line::from(vec!["Wheel velo:  x=".into(), v.to_string().yellow(), " y=".into(), v.to_string().yellow()])
                  ]);  
         
         let [left_top, left_bot] = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
@@ -317,23 +315,22 @@ impl<'a> App<'a> {
             .x_bounds([area.x as f64, (area.x + area.width)  as f64])
             .y_bounds([area.y as f64, (area.y + area.height)  as f64])
             .paint(|ctx| {
-                match self.world.wall_list.is_empty() {
+                let y_mid = area.y as f64 + (area.height as f64 / 2.);
+                match self.world.door_list.is_empty() {
                     false => {
                         match self.world.location {
                             Some(l) => {
                                 // Convert Coords to display size and offset.
-                                let resized_loc: (f64, f64) = 
-                                (area.x as f64 + (area.width as f64)*(l.x-self.world.min.unwrap().x)/(self.world.max.unwrap().x- self.world.min.unwrap().x),
-                                area.y as f64 + (area.height as f64)*(l.y-self.world.min.unwrap().y)/(self.world.max.unwrap().y- self.world.min.unwrap().y));
+                                let resized_loc: f64 = 
+                                    area.x as f64 + (area.width as f64)*(l-self.world.min.unwrap())/(self.world.max.unwrap()- self.world.min.unwrap());
                                 // Display as Point.
-                                ctx.draw(&Points{ coords: &vec![resized_loc], color: Color::White });
+                                ctx.draw(&Points{ coords: &vec![(resized_loc, y_mid)], color: Color::White });
                             },
                             None => (),
                         }
                         // Same for wall points.
-                        let resized_wall_list: Vec<(f64,f64)>= self.world.wall_list.iter().map(|v: &Vector2<f64>| {
-                            (area.x as f64 + (area.width as f64)*(v.x-self.world.min.unwrap().x)/(self.world.max.unwrap().x - self.world.min.unwrap().x),
-                             area.y as f64 + (area.height as f64)*(v.y-self.world.min.unwrap().y)/(self.world.max.unwrap().y - self.world.min.unwrap().y))
+                        let resized_wall_list: Vec<(f64,f64)>= self.world.door_list.iter().map(|v: &f64| {
+                            (area.x as f64 + (area.width as f64)*(v-self.world.min.unwrap())/(self.world.max.unwrap() - self.world.min.unwrap()), y_mid)
                         }).collect();
                         ctx.draw(&Points{ coords:&resized_wall_list, color: Color::White });
                     },
