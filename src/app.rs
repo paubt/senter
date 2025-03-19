@@ -1,25 +1,26 @@
+use core::f64;
+use std::char::MAX;
 use std::collections::VecDeque;
 
-use std::{thread, time::Instant};
+use std::time::Instant;
 use std::time::Duration;
-use ratatui::crossterm;
-use ratatui::widgets::canvas::{Label, Points};
-// Imports for Raspberry Pi related stuff.
-use rppal::gpio::Gpio;
-use rppal::system::DeviceInfo;
+use nalgebra::Vector2;
+//use ratatui::crossterm;
+use ratatui::widgets::canvas::Points;
 // Imports for ratatui.
 
+extern crate nalgebra as na;
 
 use std::io;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
-    symbols::{border, self, Marker},
+    symbols::{self, border},
     text::{Line, Text, Span},
-    widgets::{canvas::{self, Canvas, Circle, Map, MapResolution, Shape, Painter}, Block, Paragraph, Widget, Axis, Chart, Dataset, GraphType, LegendPosition},
+    widgets::{canvas::{Canvas, Shape, Painter}, Block, Paragraph, Axis, Chart, Dataset},
     DefaultTerminal, Frame,
 };
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
 use crate::robo;
 use robo::RobotAccess;
@@ -56,31 +57,81 @@ impl<'a> TabsState<'a> {
     }
 }
 
+
+
 #[derive(Debug)]
 pub struct World<'a> {
     pub name: &'a str,
-    pub min: (f64,f64),
-    pub max: (f64,f64),
-    pub location: (f64, f64),
-    pub wall_list: Vec<(f64,f64)>,
+    pub min: Option<Vector2<f64>>,
+    pub max: Option<Vector2<f64>>,
+    pub location: Option<Vector2<f64>>,
+    pub wall_list: Vec<Vector2<f64>>,
+}
+
+impl<'a> World<'a> {
+    pub fn new(name: &'a str, location: Option<Vector2<f64>>, wall_list: Vec<Vector2<f64>>) -> World<'a> {
+        let mut t = World {name: name, min: None, max: None, location, wall_list};
+        t.update_min_max();
+        t
+    }
+    // add a new wall point and update the min max values.
+    pub fn add_wall_point(&mut self, new_wall_point: Vector2<f64>) {
+        self.wall_list.push(new_wall_point);
+        self.update_min_max();
+    }
+    
+    fn update_min_max(&mut self) {
+        if self.wall_list.is_empty() {
+            self.max = None;
+            self.min = None;
+        }
+        else {
+            let t = self.wall_list.iter()
+                .fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |mut acc, v| {
+                    acc.0 = acc.0.min(v.x);
+                    acc.1 = acc.1.min(v.y);
+                    acc.2 = acc.2.max(v.x);
+                    acc.3 = acc.3.max(v.y);
+                    acc
+            });
+            self.min = Some(Vector2::new(t.0, t.1));
+            self.max = Some(Vector2::new(t.2, t.3));
+        }
+    }
+
+    pub fn remove_wall_point(&mut self, wall_point: Vector2<f64>) {
+        match self.wall_list.iter()
+            .find(|&&v| v == wall_point) {
+                Some(_) => {
+                    self.wall_list = self
+                        .wall_list
+                        .iter()
+                        .filter(|&& v| v != wall_point)
+                        .cloned()
+                        .collect();
+                    self.update_min_max();
+                },
+                None => (),
+            }
+    }
 }
 
 // This is so it can by drawn.
 impl<'a> Shape for World<'a> {
     fn draw(&self, painter: &mut Painter) {
-        for (x, y) in self.wall_list.clone() {
-            painter.paint(x as usize, y as usize, Color::White);
+        for v in self.wall_list.clone() {
+            painter.paint(v.x as usize, v.y as usize, Color::White);
         }
     }
 }
 
-impl<'a> World<'a> {
-    pub fn resize_to_area(&mut self, area: Rect) -> Vec<(f64,f64)> {
-        self.wall_list.iter().map(|(x, y)| {
-            (*x, *y)
-        }).collect()
-    }
-}
+// impl<'a> World<'a> {
+//     pub fn resize_to_area(&mut self, area: Rect) -> Vec<(f64,f64)> {
+//         self.wall_list.iter().map(|(x, y)| {
+//             (*x, *y)
+//         }).collect()
+//     }
+// }
 
 #[derive(Debug)]
 pub struct App<'a>{
@@ -110,8 +161,10 @@ impl<'a> App<'a> {
                 .map(|(u, f)| (u as f64, f))
                 .collect::<Vec<(f64,f64)>>()),
             mean: 0.,
-            //world: World { name: "small",min: (0.,0.),max: (39.,39.) , location: (20.,20.), wall_list: WALL_SMALL.to_vec()},
-            world: World { name: "big",min: (0.,0.),max: (99.,99.) , location: (20.,20.), wall_list: WALL_BIG.to_vec()},
+            // world: World { name: "small",min: (0.,0.),max: (39.,39.) , location: (2.,6.), wall_list: WALL_SMALL.to_vec()},
+            // world: World::new("small", None,  WALL_SMALL.to_vec().iter().map(|(x,y)| Vector2::new(*x,*y)).collect::<Vec<Vector2<f64>>>()),
+            world: World::new("big", None,  WALL_BIG.to_vec().iter().map(|(x,y)| Vector2::new(*x,*y)).collect::<Vec<Vector2<f64>>>()),
+            //world: World { name: "big",min: (0.,0.),max: (99.,99.) , location: (5.,20.), wall_list: WALL_BIG.to_vec()},
             my_pi,
             exit: false }
     }
@@ -176,20 +229,25 @@ impl<'a> App<'a> {
 
     pub fn draw(&self, frame: &mut Frame) {
         let [left, right] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(frame.area());
-        self.render_info(frame, left);
+
+        self.render_info_box(frame, left);
+        // 0 => self.render_sensor_data(frame, right),
+
         match self.tabs.index {
-            0 => self.render_sensor_data(frame, right),
+            0 => self.render_map(frame, right),
             1 => self.render_map(frame, right),
             _ => panic!("unkown tab id")
         };
         
     }
     
-    fn render_info(&self, frame: &mut Frame, area: Rect) {
+    fn render_info_box(&self, frame: &mut Frame, area: Rect) {
         let title = Line::from(" Senter ".bold());
         let instructions = Line::from(vec![
-            " Make new Measurements ".into(),
-            "<Enter>".blue().bold(),
+            " Move ".into(),
+            "<Arrows>".blue().bold(),
+            " reset ".into(),
+            "<r>".blue().bold(),
             " Quit ".into(),
             "<Q> ".blue().bold(),
         ]);
@@ -197,16 +255,22 @@ impl<'a> App<'a> {
             .title(title.centered())
             .title_bottom(instructions.centered())
             .border_set(border::THICK);
-
-        let counter_text: Text<'_> = Text::from(vec![Line::from(vec![
-            "mean: ".into(),
-            self.mean.to_string().yellow(),
-        ])]);   
         
+        let (vl, vr) = self.my_pi.get_wheel_velo();
+        let p = self.my_pi.robot_position();
+        let counter_text: Text<'_> = Text::from(
+            vec![Line::from(vec!["Position: x=".into(), p.x.to_string().yellow().into(), " y=".into(), p.y.to_string().yellow().into(), ]),
+                 Line::from(vec!["Wheel velo:  x=".into(), vl.to_string().yellow(), " y=".into(), vr.to_string().yellow()])
+                 ]);  
+        
+        let [left_top, left_bot] = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+
+        self.render_sensor_data(frame, left_bot);
         let p = Paragraph::new(counter_text)
             .centered()
             .block(block);
-        frame.render_widget(p, area);
+
+        frame.render_widget(p, left_top);
     }
 
     fn render_sensor_data(&self, frame: &mut Frame, area: Rect) {
@@ -254,38 +318,45 @@ impl<'a> App<'a> {
         frame.render_widget(chart, area);
     }
 
-    fn render_map(&self, frame: &mut Frame, area: Rect) {
-    
-        let resized_wall_list: Vec<(f64,f64)>= self.world.wall_list.iter().map(|(a, b)| {
-            (area.x as f64 + (area.width as f64)*(*a-self.world.min.0)/(self.world.max.0- self.world.min.0),
-             area.y as f64 + (area.height as f64)*(*b-self.world.min.1)/(self.world.max.1- self.world.min.1))
-        }).collect();
-
+    fn render_map(&self, frame: &mut Frame, area: Rect) {       
         let map = Canvas::default()
-            .block(Block::bordered().title(area.height.to_string()))
+            .block(Block::bordered().title(self.world.name))
             .x_bounds([area.x as f64, (area.x + area.width)  as f64])
             .y_bounds([area.y as f64, (area.y + area.height)  as f64])
-            //.block(Block::bordered().title(self.world.name))
             .paint(|ctx| {
-                // ctx.draw(&canvas::Line {
-                //     // x1: 0.0,
-                //     // y1: 10.0,
-                //     // x2: 10.0,
-                //     // y2: 10.0,
+                match self.world.wall_list.is_empty() {
+                    false => {
+                        match self.world.location {
+                            Some(l) => {
+                                // Convert Coords to display size and offset.
+                                let resized_loc: (f64, f64) = 
+                                (area.x as f64 + (area.width as f64)*(l.x-self.world.min.unwrap().x)/(self.world.max.unwrap().x- self.world.min.unwrap().x),
+                                area.y as f64 + (area.height as f64)*(l.y-self.world.min.unwrap().y)/(self.world.max.unwrap().y- self.world.min.unwrap().y));
+                                // Display as Point.
+                                ctx.draw(&Points{ coords: &vec![resized_loc], color: Color::White });
+                            },
+                            None => (),
+                        }
+                        // Same for wall points.
+                        let resized_wall_list: Vec<(f64,f64)>= self.world.wall_list.iter().map(|v: &Vector2<f64>| {
+                            (area.x as f64 + (area.width as f64)*(v.x-self.world.min.unwrap().x)/(self.world.max.unwrap().x - self.world.min.unwrap().x),
+                             area.y as f64 + (area.height as f64)*(v.y-self.world.min.unwrap().y)/(self.world.max.unwrap().y - self.world.min.unwrap().y))
+                        }).collect();
+                        ctx.draw(&Points{ coords:&resized_wall_list, color: Color::White });
+                    },
+                    true => (),
+                }
+                // ctx.draw(&ratatui::widgets::canvas::Line {
                 //     x1: area.x as f64,
                 //     y1: area.y as f64,
-                //     x2: (area.x + area.width) as f64,
-                //     y2: (area.y + area.height) as f64,
+                //     x2: (area.x + (area.width / 8 )) as f64,
+                //     y2: (area.y + (area.height / 2)) as f64,
                 //     color: Color::White,
                 // });
-                //ctx.draw(&canvas::Label{x: 0., y:0., line: "slel"});
-                //ctx.draw(&self.world);
-                ctx.draw(&Points{ coords: &vec![(area.x as f64+3., area.y as f64+5.)], color: Color::White });
-                ctx.draw(&Points{ coords:&resized_wall_list, color: Color::White });
-
                 });
         frame.render_widget(map, area);
     }
+
     fn raise_tab(&mut self) {
         self.tabs.next();
     }

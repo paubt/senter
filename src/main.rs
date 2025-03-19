@@ -61,10 +61,12 @@ fn main() -> io::Result<()> {
             {
                 panic!("Unknown Raspberry Pi -> check if adjustments need to be made!")
             },
-        Err(_) =>
+        Err(_) => {
             // Here we know that we are not on a Raspberry Pi-
             // Thus we return the Simulated Pi,
-            MyPi::Sim(robo::sim_pi::MyPiSim::new(10.))
+            let sim = robo::sim_pi::MyPiSim::new(5., app::WALL_SMALL.to_vec().iter().map(|(x,y)| nalgebra::Vector2::new(*x,*y)).collect::<Vec<nalgebra::Vector2<f64>>>());
+            MyPi::Sim(sim)
+        }
     };
     //  -----------------------------------------------
     // Here we start with the setup of the terminal UI.
