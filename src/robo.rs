@@ -120,11 +120,23 @@ pub mod sim_pi {
     }
 
     #[derive(Debug)]
+    pub struct MyRobo {
+        // distance between wheel
+        diff_dive_const_l: f64,
+        // where the robot beliefs it is. (x y theta)^T
+        robot_position: Vector3<f64>,
+
+    }
+
+    #[derive(Debug)]
     pub struct MyPiSim {
         v: f64,
         max_range: f64,
         map: Vec<Vec<PositionType>>,
-        robot_position: Vector3<f64>,
+        // real_pose: (x y theta)^T
+        robot_pose: Vector3<f64>,
+        // action: (v_l v_r)^T
+        robot_action: Vector2<f64>,
         belief: Vec<Vec<f64>>,
         max_velo: f64,
         min_velo: f64,
@@ -155,6 +167,7 @@ pub mod sim_pi {
     impl super::RobotAccess for MyPiSim {
         // Increase the value by one and return it. If it is larger than max_range set it to zero.
         fn get_hcsr04_dist(&mut self) -> Option<f64> {
+            
             self.v += 0.2;
             if self.v > self.max_range {
                 self.v = 0.;
