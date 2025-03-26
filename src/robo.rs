@@ -1,14 +1,9 @@
 use std::time::Duration;
 
-use nalgebra::{Vector2, Vector3};
-
-
 extern crate nalgebra as na;
-
 
 pub enum RobotStartBelief {
     // Startposition is as point mass at the given location.
-    PointMass(f64),
     Uniform,
 }
 
@@ -38,7 +33,7 @@ pub trait RobotAccess {
 }
 
 pub mod real_pi {
-    use hc_sr04::{HcSr04, Unit};
+    use hc_sr04::HcSr04;
     use rppal::gpio::Gpio;
     #[derive(Debug)]
     pub struct MyPiReal {
@@ -143,17 +138,8 @@ pub mod real_pi {
 }
 
 pub mod sim_pi {
-    use std::{f64::consts::PI, time::{Duration, Instant}};
-
-    use nalgebra::{Vector2, Vector3};
-
+    use std::{f64::consts::PI, time::Duration};
     use super::RobotAccess;
-    
-    #[derive(Debug,Clone,Copy, PartialEq, Eq)]
-    pub enum PositionType {
-        Wall,
-        Empty,
-    }
 
     #[derive(Debug)]
     pub struct MyPiSim {
@@ -161,7 +147,6 @@ pub mod sim_pi {
         map: Vec<(f64,u64)>,
         // Environment from Zero to size.
         map_size: u64,
-        last_update: Instant, 
         // real robot
         pub movement_std: f64,
         pub measurement_std: f64,
@@ -192,21 +177,19 @@ pub mod sim_pi {
             let mut t = MyPiSim {
                 map: Vec::new(),
                 map_size: map_size,
-                last_update: Instant::now(),
                 belief: Vec::new(),
                 robot_pose: 20.,
                 max_velo: 10.,
                 min_velo: -10.,
-                velo: 10.,
+                velo: 2.,
                 update_delta_t: Duration::from_secs(1),
-                movement_std: 1.,
+                movement_std: 0.1,
                 measurement_std: 1.,
                 motion_model_alpha: 0.2,
             };
             t.set_map(map);
             t.set_robot_belief(super::RobotStartBelief::Uniform);
             t
-
         }
         fn run_grid_loc(&mut self, z: SensorReading) {
             // Table 8.1
@@ -227,16 +210,16 @@ pub mod sim_pi {
                 }
 
                 // then perception
-                // let mut p_new: Vec<f64> = Vec::new();
+                let mut p_new: Vec<f64> = Vec::new();
 
-                // for k in 0..self.map_size {
-                //     p_new.push( bar_bel[k as usize] * self.measurement_model_z_at_x(k as f64, &z));
-                // }
-                // let norm: f64= p_new.iter().sum();
+                for k in 0..self.map_size {
+                    p_new.push( self.belief[k as usize] * self.measurement_model_z_at_x(k as f64, &z));
+                }
+                let norm: f64= p_new.iter().sum();
 
-                // for k in 0..self.map_size {
-                //     self.belief[k as usize] = (1. / norm) * p_new[k as usize];
-                // }
+                for k in 0..self.map_size {
+                    self.belief[k as usize] = (1. / norm) * p_new[k as usize];
+                }
             }
             // Only preceptual.
             else {
@@ -259,7 +242,7 @@ pub mod sim_pi {
             // find closest and clac prob
             let d = self.map
                 .iter()
-                .max_by(|(a,s1),(b,s2)| {
+                .max_by(|(a,_),(b,_)| {
                     if (a -  x).abs() > (b - x).abs() {
                         std::cmp::Ordering::Less
                     }
@@ -322,7 +305,6 @@ pub mod sim_pi {
         
         fn set_robot_belief(&mut self, robot_start_belief: super::RobotStartBelief) {
             match robot_start_belief {
-                super::RobotStartBelief::PointMass(_) => todo!(),
                 super::RobotStartBelief::Uniform => self.belief = vec![1. / self.map_size as f64; self.map_size as usize],
             }
         }
@@ -368,7 +350,7 @@ pub mod sim_pi {
             let sensor_dist_threshold = 3.;
             let z: SensorReading = self.map.iter()
                 .fold(SensorReading::Nothing,
-                      |acc , (x,s)| if ((self.robot_pose - x).abs() < sensor_dist_threshold) {SensorReading::Door} else {acc}  );
+                      |acc , (x,_)| if (self.robot_pose - x).abs() < sensor_dist_threshold {SensorReading::Door} else {acc}  );
             
             // Run the localization alog.
             self.run_grid_loc(z);

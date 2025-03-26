@@ -46,7 +46,7 @@ fn main() -> io::Result<()> {
     // Here we start with the Hardward setup.
     // Here we check if we are running on a raspberry Pi or a something else.
     // Either way we get a MyPi object.
-    let mut my_pi = match DeviceInfo::new() 
+    let my_pi = match DeviceInfo::new() 
     {
         Ok(di) => 
             if di.model() == rppal::system::Model::RaspberryPi4B

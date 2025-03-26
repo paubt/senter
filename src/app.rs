@@ -1,10 +1,7 @@
 use core::f64;
-use std::char::MAX;
-use std::collections::VecDeque;
 
 use std::time::Instant;
 use std::time::Duration;
-use nalgebra::Vector2;
 //use ratatui::crossterm;
 use ratatui::widgets::canvas::Points;
 use ratatui::widgets::canvas::Rectangle;
@@ -18,7 +15,7 @@ use ratatui::{
     style::{Color, Modifier, Style, Stylize},
     symbols::{self, border},
     text::{Line, Text, Span},
-    widgets::{canvas::{Canvas, Shape, Painter}, Block, Paragraph, Axis, Chart, Dataset},
+    widgets::{canvas::Canvas, Block, Paragraph, Axis, Chart, Dataset},
     DefaultTerminal, Frame,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -72,12 +69,12 @@ pub struct World<'a> {
 
 impl<'a> World<'a> {
     pub fn new(name: &'a str, location: Option<f64>, door_list: Vec<f64>) -> World<'a> {
-        let mut t = World {
+        let t = World {
             name: name, min: Some(0.), 
             max: Some(100.), location, door_list, 
             belief: None, measurment:None, 
-            velo: 10., delta_t: Duration::from_secs(1), 
-            mov_std_dev: 1., mea_std_dev: 1. };
+            velo: 1., delta_t: Duration::from_secs(1), 
+            mov_std_dev: 0.1, mea_std_dev: 1. };
         t
     }
     pub fn estimate_loc_after_next_step(&self) -> Option<f64> {
@@ -85,7 +82,6 @@ impl<'a> World<'a> {
             Some(l) => Some(l + self.velo*self.delta_t.as_secs_f64()),
             None => None,
         }
-         
     }
 }
 
@@ -121,7 +117,7 @@ impl<'a> App<'a> {
         // This is the rate of update.
         let tick_rate = Duration::from_millis(125);
         // This stores the time of last update.
-        let mut last_tick = Instant::now();
+        let last_tick = Instant::now();
         // This is the main loop.
         // Here we check at the beginning if the exit flag is set.
         while !self.exit {
@@ -153,27 +149,6 @@ impl<'a> App<'a> {
                     _ => {}
                 }
             }
-            // If the time since the last update is larger than the tick rate
-            // we need to get a new measurment.
-            // if last_tick.elapsed() >= tick_rate {
-            //     if self.sens_data {
-            //         // remove the oldest element.
-            //         let (_, ov ) = self.ring_buf.pop_back().unwrap();
-            //         // Get the index of the newest element by getting the seconde newest 
-            //         // and add 1.
-            //         let idx = match self.ring_buf.front() {
-            //             Some((i, _)) => *i + 1.,
-            //             None => 0.,
-            //         };
-            //         // 
-            //         match self.my_pi.get_hcsr04_dist() {
-            //             Some(v) => self.ring_buf.push_front((idx ,v)),
-            //             None => self.ring_buf.push_front((idx,self.my_pi.get_hcsr04_max_range())),
-            //         }
-            //         self.mean = self.mean + (self.ring_buf.front().unwrap().1 - ov) / SIZE_RINGBUFF_DIST as f64
-            //     }
-            //     last_tick = Instant::now();
-            // }
         }
         Ok(())
     }
@@ -185,7 +160,7 @@ impl<'a> App<'a> {
         // 0 => self.render_sensor_data(frame, right),
         let [right_top, right_mid, right_bot] = Layout::vertical([Constraint::Length(4), Constraint::Fill(1), Constraint::Fill(1)]).areas(right);
         
-        let [map_empty, actual_map] = Layout::horizontal([Constraint::Length((4)), Constraint::Fill(1)]).areas(right_top);
+        let [_, actual_map] = Layout::horizontal([Constraint::Length(5), Constraint::Fill(1)]).areas(right_top);
         self.render_map(frame, actual_map);
         self.render_measurement(frame, right_mid);
         self.render_belief(frame, right_bot);
@@ -252,11 +227,6 @@ impl<'a> App<'a> {
                             None => (),
                         }
                         // Same for wall points.
-                        // let resized_door_list: Vec<(f64,f64)> = self.world.door_list.iter().map(|d: &f64| {
-                        //     (area.x as f64 + (area.width as f64)*(d-self.world.min.unwrap())/(self.world.max.unwrap() - self.world.min.unwrap()), y_door)
-                        //     //(*v, y_mid)
-                        // }).collect();
-                        // ctx.draw(&Points{ coords:&resized_wall_list, color: Color::White });
                         let r_w = 1.;
                         let r_h = 1.;
                         let resized_door_list: Vec<Rectangle> = self.world.door_list.iter().map(|d: &f64| {
@@ -275,14 +245,7 @@ impl<'a> App<'a> {
                     },
                     true => (),
                 }
-                // ctx.draw(&ratatui::widgets::canvas::Line {
-                //     x1: area.x as f64,
-                //     y1: area.y as f64,
-                //     x2: (area.x + (area.width / 8 )) as f64,
-                //     y2: (area.y + (area.height / 2)) as f64,
-                //     color: Color::White,
-                // });
-                });
+            });
         frame.render_widget(map, area);
     }
 
