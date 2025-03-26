@@ -7,6 +7,7 @@ use std::time::Duration;
 use nalgebra::Vector2;
 //use ratatui::crossterm;
 use ratatui::widgets::canvas::Points;
+use ratatui::widgets::canvas::Rectangle;
 // Imports for ratatui.
 
 extern crate nalgebra as na;
@@ -25,32 +26,34 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crate::robo;
 use robo::RobotAccess;
 
-
-// Consts for Ratatui.
-const SIZE_RINGBUFF_DIST: usize = 60;
-
 #[derive(Debug)]
-pub struct TabsState<'a> {
-    pub titles: Vec<&'a str>,
-    pub index: usize,
+pub enum SelectEnum {
+    Velo,
+    DelTime,
+    MovStdDev,
+    MeaStdDev,
 }
 
-impl<'a> TabsState<'a> {
-    pub const fn new(titles: Vec<&'a str>) -> Self {
-        Self { titles, index: 0 }
-    }
-    pub fn next(&mut self) {
-        self.index = (self.index + 1) % self.titles.len();
+impl SelectEnum {
+    pub fn next(&self) -> SelectEnum {
+        match self {
+            SelectEnum::Velo => SelectEnum::DelTime,
+            SelectEnum::DelTime => SelectEnum::MovStdDev,
+            SelectEnum::MovStdDev => SelectEnum::MeaStdDev,
+            SelectEnum::MeaStdDev => SelectEnum::Velo,
+        }
     }
 
-    pub fn previous(&mut self) {
-        if self.index > 0 {
-            self.index -= 1;
-        } else {
-            self.index = self.titles.len() - 1;
+    pub fn previous(&self) -> SelectEnum{
+        match self {
+            SelectEnum::Velo => SelectEnum::MeaStdDev,
+            SelectEnum::DelTime => SelectEnum::Velo,
+            SelectEnum::MovStdDev => SelectEnum::DelTime,
+            SelectEnum::MeaStdDev => SelectEnum::MovStdDev,
         }
     }
 }
+
 
 #[derive(Debug)]
 pub struct World<'a> {
@@ -59,105 +62,59 @@ pub struct World<'a> {
     pub max: Option<f64>,
     pub location: Option<f64>,
     pub door_list: Vec<f64>,
+    pub belief: Option<Vec<f64>>,
+    pub measurment: Option<Vec<f64>>,
+    pub velo: f64,
+    pub delta_t: Duration,
+    pub mov_std_dev: f64,
+    pub mea_std_dev: f64
 }
 
 impl<'a> World<'a> {
     pub fn new(name: &'a str, location: Option<f64>, door_list: Vec<f64>) -> World<'a> {
-        let mut t = World {name: name, min: None, max: None, location, door_list};
-        t.update_min_max();
+        let mut t = World {
+            name: name, min: Some(0.), 
+            max: Some(100.), location, door_list, 
+            belief: None, measurment:None, 
+            velo: 10., delta_t: Duration::from_secs(1), 
+            mov_std_dev: 1., mea_std_dev: 1. };
         t
     }
-    // add a new wall point and update the min max values.
-    pub fn add_wall_point(&mut self, new_wall_point: f64) {
-        self.door_list.push(new_wall_point);
-        self.update_min_max();
-    }
-    
-    fn update_min_max(&mut self) {
-        if self.door_list.is_empty() {
-            self.max = None;
-            self.min = None;
+    pub fn estimate_loc_after_next_step(&self) -> Option<f64> {
+        match self.location {
+            Some(l) => Some(l + self.velo*self.delta_t.as_secs_f64()),
+            None => None,
         }
-        else {
-            let t = self.door_list.iter()
-                .fold((f64::MAX, f64::MIN), |mut acc, v| {
-                    acc.0 = acc.0.min(*v);
-                    acc.1 = acc.1.max(*v);
-                    acc
-            });
-            self.min  = Some(t.0);
-            self.max = Some(t.1);
-        }
-    }
-
-    pub fn remove_wall_point(&mut self, door_point: f64) {
-        match self.door_list.iter()
-            .find(|&&v| v == door_point) {
-                Some(_) => {
-                    self.door_list = self
-                        .door_list
-                        .iter()
-                        .filter(|&& v| v != door_point)
-                        .cloned()
-                        .collect();
-                    self.update_min_max();
-                },
-                None => (),
-            }
+         
     }
 }
 
-// This is so it can by drawn.
-// impl<'a> Shape for World<'a> {
-//     fn draw(&self, painter: &mut Painter) {
-//         for v in self.door_list.clone() {
-//             painter.paint( as usize, v.y as usize, Color::White);
-//         }
-//     }
-// }
-
-// impl<'a> World<'a> {
-//     pub fn resize_to_area(&mut self, area: Rect) -> Vec<(f64,f64)> {
-//         self.wall_list.iter().map(|(x, y)| {
-//             (*x, *y)
-//         }).collect()
-//     }
-// }
 
 #[derive(Debug)]
 pub struct App<'a>{
-    pub tabs: TabsState<'a>,
     // Window A: Sensor data real time.
     // True if we want to record data with the sensor.
-    sens_data: bool,
-    // Ring buffer that pops at the end when inserting something at the beginning.
-    ring_buf: VecDeque<(f64,f64)>,
-    mean: f64,
     // Stuff for Map display.
     world: World<'a>,
     // Stores the Access to the Hardware or its simulation.
     my_pi: robo::MyPi,
     // True if we want to close the app.
     exit: bool,
+    // 
+    sel_enu: SelectEnum,
 }
 
 impl<'a> App<'a> {
     pub fn new(my_pi: robo::MyPi) -> Self {
-        App {
-            tabs: TabsState::new(vec!["Map", "Sensor"]),
-            sens_data: false,
-            ring_buf: VecDeque::from(vec![0.; SIZE_RINGBUFF_DIST]
-                .into_iter()
-                .enumerate()
-                .map(|(u, f)| (u as f64, f))
-                .collect::<Vec<(f64,f64)>>()),
-            mean: 0.,
-            // world: World { name: "small",min: (0.,0.),max: (39.,39.) , location: (2.,6.), wall_list: WALL_SMALL.to_vec()},
-            // world: World::new("small", None,  WALL_SMALL.to_vec().iter().map(|(x,y)| Vector2::new(*x,*y)).collect::<Vec<Vector2<f64>>>()),
-            world: World::new("big", None, vec![2., 4., 7.5]),
-            //world: World { name: "big",min: (0.,0.),max: (99.,99.) , location: (5.,20.), wall_list: WALL_BIG.to_vec()},
+        let mut a = App {
+            world: World::new("world", None, vec![(10.),(20.),(75.)]),
             my_pi,
-            exit: false }
+            exit: false,
+            sel_enu: SelectEnum::Velo};
+        a.world.location = Some(a.my_pi.robot_position());
+        a.world.measurment = Some(a.my_pi.robot_measurement());
+        a.world.belief = Some(a.my_pi.robot_belief());
+        a
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -183,10 +140,13 @@ impl<'a> App<'a> {
                     Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                         match key_event.code {
                             KeyCode::Char('q') => self.exit(),
-                            KeyCode::Char('w') => self.deactivate_sensor(),
-                            KeyCode::Char('e') => self.activate_sensor(),
-                            KeyCode::Left => self.lower_tab(),
-                            KeyCode::Right => self.raise_tab(), 
+                            // KeyCode::Char('') => self.deactivate_sensor(),
+                            // KeyCode::Char('e') => self.activate_sensor(),
+                            KeyCode::Enter => self.next_step(),
+                            KeyCode::Up => self.select_previouse_state(),
+                            KeyCode::Down => self.select_next_state(),
+                            KeyCode::Left => self.value_decrease_from_selected_state(),
+                            KeyCode::Right => self.value_increase_from_selected_state(),
                             _ => {}
                         }
                     }
@@ -195,118 +155,80 @@ impl<'a> App<'a> {
             }
             // If the time since the last update is larger than the tick rate
             // we need to get a new measurment.
-            if last_tick.elapsed() >= tick_rate {
-                if self.sens_data {
-                    // remove the oldest element.
-                    let (_, ov ) = self.ring_buf.pop_back().unwrap();
-                    // Get the index of the newest element by getting the seconde newest 
-                    // and add 1.
-                    let idx = match self.ring_buf.front() {
-                        Some((i, _)) => *i + 1.,
-                        None => 0.,
-                    };
-                    // 
-                    match self.my_pi.get_hcsr04_dist() {
-                        Some(v) => self.ring_buf.push_front((idx ,v)),
-                        None => self.ring_buf.push_front((idx,self.my_pi.get_hcsr04_max_range())),
-                    }
-                    self.mean = self.mean + (self.ring_buf.front().unwrap().1 - ov) / SIZE_RINGBUFF_DIST as f64
-                }
-                last_tick = Instant::now();
-            }
+            // if last_tick.elapsed() >= tick_rate {
+            //     if self.sens_data {
+            //         // remove the oldest element.
+            //         let (_, ov ) = self.ring_buf.pop_back().unwrap();
+            //         // Get the index of the newest element by getting the seconde newest 
+            //         // and add 1.
+            //         let idx = match self.ring_buf.front() {
+            //             Some((i, _)) => *i + 1.,
+            //             None => 0.,
+            //         };
+            //         // 
+            //         match self.my_pi.get_hcsr04_dist() {
+            //             Some(v) => self.ring_buf.push_front((idx ,v)),
+            //             None => self.ring_buf.push_front((idx,self.my_pi.get_hcsr04_max_range())),
+            //         }
+            //         self.mean = self.mean + (self.ring_buf.front().unwrap().1 - ov) / SIZE_RINGBUFF_DIST as f64
+            //     }
+            //     last_tick = Instant::now();
+            // }
         }
         Ok(())
     }
 
     pub fn draw(&self, frame: &mut Frame) {
-        let [left, right] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(frame.area());
+        let [left, right] = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(2)]).areas(frame.area());
 
         self.render_info_box(frame, left);
         // 0 => self.render_sensor_data(frame, right),
-
-        match self.tabs.index {
-            0 => self.render_map(frame, right),
-            1 => self.render_map(frame, right),
-            _ => panic!("unkown tab id")
-        };
+        let [right_top, right_mid, right_bot] = Layout::vertical([Constraint::Length(4), Constraint::Fill(1), Constraint::Fill(1)]).areas(right);
+        
+        let [map_empty, actual_map] = Layout::horizontal([Constraint::Length((4)), Constraint::Fill(1)]).areas(right_top);
+        self.render_map(frame, actual_map);
+        self.render_measurement(frame, right_mid);
+        self.render_belief(frame, right_bot);
         
     }
     
     fn render_info_box(&self, frame: &mut Frame, area: Rect) {
         let title = Line::from(" Senter ".bold());
         let instructions = Line::from(vec![
-            " Move ".into(),
+            " Select/Change ".into(),
             "<Arrows>".blue().bold(),
-            " reset ".into(),
-            "<r>".blue().bold(),
+            " Next Step ".into(),
+            "<Enter>".blue().bold(),
             " Quit ".into(),
             "<Q> ".blue().bold(),
         ]);
         let block = Block::bordered()
             .title(title.centered())
             .title_bottom(instructions.centered())
-            .border_set(border::THICK);
+            .border_set(border::PLAIN);
         
-        let v = self.my_pi.get_velo();
-        let p = self.my_pi.robot_position();
-        let counter_text: Text<'_> = Text::from(
-            vec![Line::from(vec!["Position: x=".into(), p.to_string().yellow().into(), " y=".into(), p.to_string().yellow().into(), ]),
-                 Line::from(vec!["Wheel velo:  x=".into(), v.to_string().yellow(), " y=".into(), v.to_string().yellow()])
-                 ]);  
-        
-        let [left_top, left_bot] = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
-
-        self.render_sensor_data(frame, left_bot);
+        let mut lines = vec![Line::from(vec!["Position: x=".into(),  self.world.location.unwrap_or(-1.).to_string().yellow().into()]),
+            Line::from(vec!["Velocity: v= ".into(), self.world.velo.to_string().yellow().into(), "ms".into()]),
+            Line::from(vec!["Delta time: Δt=".into(), self.world.delta_t.as_secs_f64().to_string().yellow().into(), "s".into()]),
+            Line::from(vec!["Movement standard deviation: σ_mov=".into(), self.world.mov_std_dev.to_string().yellow().into(), "".into()]),
+            Line::from(vec!["Measurement standard deviation: σ_obs=".into(), self.world.mea_std_dev.to_string().yellow().into(), "".into()]),
+            Line::from(vec!["Estimated position next step: new_x=".into(), self.world.estimate_loc_after_next_step().unwrap_or(-1.0).to_string().yellow().into(), "".into()])
+            ];
+        // Underline the line that is currently editable.
+        let x = match self.sel_enu {
+            SelectEnum::Velo => 1,
+            SelectEnum::DelTime => 2,
+            SelectEnum::MovStdDev => 3,
+            SelectEnum::MeaStdDev => 4,
+        };
+        lines[x] = lines[x].clone().underlined();
+        let counter_text: Text<'_> = Text::from(lines);
+            
         let p = Paragraph::new(counter_text)
             .centered()
             .block(block);
-
-        frame.render_widget(p, left_top);
-    }
-
-    fn render_sensor_data(&self, frame: &mut Frame, area: Rect) {
-        let li = self.ring_buf.back().unwrap().0;
-        let ri = self.ring_buf.front().unwrap().0;
-        
-        let mut t = self.ring_buf.clone();
-
-        let x_labels = vec![
-            Span::styled(
-                format!("{}", li),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!("{}", (li + ri) as f32 / 2.0)),
-            Span::styled(
-                format!("{}", ri),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ];
-        let datasets = vec![
-            Dataset::default()
-                .name("hcsr04")
-                .marker(symbols::Marker::Dot)
-                .style(Style::default().fg(Color::Cyan))
-                .data(t.make_contiguous())
-        ];
-
-        let chart = Chart::new(datasets)
-            .block(Block::bordered().title("Sensor"))
-            .x_axis(
-                Axis::default()
-                    .title("time")
-                    .style(Style::default().fg(Color::Gray))
-                    .labels(x_labels)
-                    .bounds([li as f64, ri as f64]),
-            )
-            .y_axis(
-                Axis::default()
-                    .title("distance")
-                    .style(Style::default().fg(Color::Gray))
-                    .labels(["0".bold(),"5".into(), "10".bold()])
-                    .bounds([0., 10.0]),
-            );
-
-        frame.render_widget(chart, area);
+            
+        frame.render_widget(p, area);
     }
 
     fn render_map(&self, frame: &mut Frame, area: Rect) {       
@@ -315,7 +237,8 @@ impl<'a> App<'a> {
             .x_bounds([area.x as f64, (area.x + area.width)  as f64])
             .y_bounds([area.y as f64, (area.y + area.height)  as f64])
             .paint(|ctx| {
-                let y_mid = area.y as f64 + (area.height as f64 / 2.);
+                let y_door = area.y as f64 + ((area.height as f64 / 3.) * 2.);
+                let y_rob = area.y as f64 + ((area.height as f64 / 3.));
                 match self.world.door_list.is_empty() {
                     false => {
                         match self.world.location {
@@ -324,15 +247,31 @@ impl<'a> App<'a> {
                                 let resized_loc: f64 = 
                                     area.x as f64 + (area.width as f64)*(l-self.world.min.unwrap())/(self.world.max.unwrap()- self.world.min.unwrap());
                                 // Display as Point.
-                                ctx.draw(&Points{ coords: &vec![(resized_loc, y_mid)], color: Color::White });
+                                ctx.draw(&Points{ coords: &vec![(resized_loc, y_rob)], color: Color::Gray });
                             },
                             None => (),
                         }
                         // Same for wall points.
-                        let resized_wall_list: Vec<(f64,f64)>= self.world.door_list.iter().map(|v: &f64| {
-                            (area.x as f64 + (area.width as f64)*(v-self.world.min.unwrap())/(self.world.max.unwrap() - self.world.min.unwrap()), y_mid)
+                        // let resized_door_list: Vec<(f64,f64)> = self.world.door_list.iter().map(|d: &f64| {
+                        //     (area.x as f64 + (area.width as f64)*(d-self.world.min.unwrap())/(self.world.max.unwrap() - self.world.min.unwrap()), y_door)
+                        //     //(*v, y_mid)
+                        // }).collect();
+                        // ctx.draw(&Points{ coords:&resized_wall_list, color: Color::White });
+                        let r_w = 1.;
+                        let r_h = 1.;
+                        let resized_door_list: Vec<Rectangle> = self.world.door_list.iter().map(|d: &f64| {
+                            Rectangle { 
+                                x: area.x as f64 + (area.width as f64)*((d-self.world.min.unwrap())/(self.world.max.unwrap() - self.world.min.unwrap())) - r_w/2., 
+                                y: y_door , 
+                                width: r_w, 
+                                height: r_h, 
+                                color: Color::Blue }
+
                         }).collect();
-                        ctx.draw(&Points{ coords:&resized_wall_list, color: Color::White });
+
+                        resized_door_list.iter().for_each(|r| ctx.draw(r));
+                        
+                    
                     },
                     true => (),
                 }
@@ -347,24 +286,172 @@ impl<'a> App<'a> {
         frame.render_widget(map, area);
     }
 
-    fn raise_tab(&mut self) {
-        self.tabs.next();
+    fn render_measurement(&self, frame: &mut Frame, area: Rect) {
+        match &self.world.measurment {
+            Some(m) => {
+                let max_y  = m.iter().fold(f64::MIN, |acc, x| f64::max(acc, *x) );
+                let mid_y = max_y/2.;
+                let x_labels = vec![
+                    Span::styled(
+                        format!("{}", 0),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("{}", m.len() as f64 / 2.0)),
+                    Span::styled(
+                        format!("{}", m.iter().len() as f64),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )];
+                let d = m.iter().enumerate().map(|(i,x)| (i as f64,*x )).clone().collect::<Vec<(f64,f64)>>();
+                let datasets = vec![
+                    Dataset::default()
+                        //.name("p(z|m)")
+                        .marker(symbols::Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .data(&d)];
+                let chart = Chart::new(datasets)
+                    .block(Block::bordered().title("Measurement"))
+                    .x_axis(
+                        Axis::default()
+                            .title("x")
+                            .style(Style::default().fg(Color::Gray))
+                            .labels(x_labels)
+                            .bounds([0., 100.]),
+                    )
+                    .y_axis(
+                        Axis::default()
+                            .title("p(z|x)")
+                            .style(Style::default().fg(Color::Gray))
+                            .labels(["0".bold(),
+                                mid_y.to_string().chars().take(4).collect::<String>().into(), 
+                                max_y.to_string().chars().take(4).collect::<String>().bold()])
+                            .bounds([0., max_y]),
+                    );
+
+                frame.render_widget(chart, area);
+                
+            },
+            None => {
+                let title = Line::from("Measurement");
+                let block = Block::bordered()
+                    .title(title.left_aligned())
+                    .border_set(border::PLAIN);
+                let counter_text: Text<'_> = Text::from(
+                    vec![Line::from(vec!["No Measurement yet".into()])]);  
+                
+                let p = Paragraph::new(counter_text)
+                    .centered()
+                    .block(block);
+
+                frame.render_widget(p, area);
+            },
+        }
     }
     
-    fn lower_tab(&mut self) {
-        self.tabs.previous();
+    fn render_belief(&self, frame: &mut Frame, area: Rect) {
+        match &self.world.belief {
+            Some(b) => {
+                let max_y  = b.iter().fold(f64::MIN, |acc, x| f64::max(acc, *x) );
+                let mid_y = max_y/2.;
+                let x_labels = vec![
+                    Span::styled(
+                        format!("{}", 0),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("{}", b.len() as f64 / 2.0)),
+                    Span::styled(
+                        format!("{}", b.len() as f64),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )];
+                let d = b.iter().enumerate().map(|(i,x)| (i as f64,*x)).clone().collect::<Vec<(f64,f64)>>();
+                let datasets = vec![
+                    Dataset::default()
+                        .name("Belief")
+                        .marker(symbols::Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .data(&d)];
+                let chart = Chart::new(datasets)
+                    .block(Block::bordered().title("Belief"))
+                    .x_axis(
+                        Axis::default()
+                            .title("x")
+                            .style(Style::default().fg(Color::Gray))
+                            .labels(x_labels)
+                            .bounds([0., 100.]),
+                    )
+                    .y_axis(
+                        Axis::default()
+                            .title("bel(x)")
+                            .style(Style::default().fg(Color::Gray))
+                            .labels(["0".bold(),
+                            mid_y.to_string().chars().take(4).collect::<String>().into(), 
+                            max_y.to_string().chars().take(4).collect::<String>().bold()])
+                        .bounds([0., max_y]),
+                );
+
+
+                frame.render_widget(chart, area);
+                
+            },
+            None => {
+                let title = Line::from("Belief bel(x)");
+                let block = Block::bordered()
+                    .title(title.left_aligned())
+                    .border_set(border::PLAIN);
+                let counter_text: Text<'_> = Text::from(
+                    vec![Line::from(vec!["No Belief yet".into()])]);  
+                
+                let p = Paragraph::new(counter_text)
+                    .centered()
+                    .block(block);
+
+                frame.render_widget(p, area);
+            },
+        }
     }
+    
     
     fn exit(&mut self) {
         self.exit = true;
     }
-
-    fn activate_sensor(&mut self) {
-        self.sens_data = true
+    
+    fn next_step(&mut self) {
+        // First send the updated values.
+        self.my_pi.set_velo(self.world.velo);
+        self.my_pi.set_delta_t(self.world.delta_t);
+        self.my_pi.set_mov_std(self.world.mov_std_dev);
+        self.my_pi.set_mae_std(self.world.mea_std_dev);
+        // Invoke the actuall next step.
+        self.my_pi.next_step();
+        // Update values of the world after the step;
+        self.world.location = Some(self.my_pi.robot_position());
+        self.world.belief = Some(self.my_pi.robot_belief());
+        self.world.measurment = Some(self.my_pi.robot_measurement());
     }
-
-    fn deactivate_sensor(&mut self) {
-        self.sens_data = false
+    
+    fn select_previouse_state(&mut self) {
+        self.sel_enu = self.sel_enu.previous()
+    }
+    
+    fn select_next_state(&mut self) {
+        self.sel_enu = self.sel_enu.next()
+    }
+    
+    fn value_decrease_from_selected_state(&mut self) {
+        match self.sel_enu {
+            SelectEnum::Velo => self.world.velo = self.world.velo - 0.5 ,
+            SelectEnum::DelTime => self.world.delta_t = self.world.delta_t - Duration::from_secs_f64(0.5),
+            SelectEnum::MovStdDev => self.world.mov_std_dev = self.world.mov_std_dev - 0.5 ,
+            SelectEnum::MeaStdDev => self.world.mea_std_dev = self.world.mea_std_dev - 0.5 ,
+        }
+    }
+    
+    fn value_increase_from_selected_state(&mut self) {
+        match self.sel_enu {
+            SelectEnum::Velo => self.world.velo = self.world.velo + 0.5 ,
+            SelectEnum::DelTime => self.world.delta_t = self.world.delta_t + Duration::from_secs_f64(0.5) ,
+            SelectEnum::MovStdDev => self.world.mov_std_dev = self.world.mov_std_dev + 0.5 ,
+            SelectEnum::MeaStdDev => self.world.mea_std_dev = self.world.mea_std_dev + 0.5 ,
+        }
     }
 
 }

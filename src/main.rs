@@ -64,7 +64,7 @@ fn main() -> io::Result<()> {
         Err(_) => {
             // Here we know that we are not on a Raspberry Pi-
             // Thus we return the Simulated Pi,
-            let sim = robo::sim_pi::MyPiSim::new(5., app::WALL_SMALL.to_vec().iter().map(|(x,y)| nalgebra::Vector2::new(*x,*y)).collect::<Vec<nalgebra::Vector2<f64>>>());
+            let sim = robo::sim_pi::MyPiSim::new(100, vec![(10.,1),(20.,2),(75.,3)]);
             MyPi::Sim(sim)
         }
     };
